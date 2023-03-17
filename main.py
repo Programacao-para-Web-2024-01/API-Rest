@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import mysql.connector
 
+cnx = mysql.connector.connect(user='root', database='classroom')
 app = FastAPI()
 
 
@@ -12,41 +14,43 @@ class Student(BaseModel):
     phone: str
 
 
-students = [
-    Student(id=1,
-            name="John Doe",
-            age=20,
-            email="john.doe@example.com",
-            phone="123456789")
-]
-
-global id_counter
-id_counter = 1
-
-
 @app.get("/students")
 async def get_students():
-    return students
+    cursor = cnx.cursor(dictionary=True)
+    query = 'SELECT * FROM `students`'
+    cursor.execute(query)
+
+    return cursor.fetchall()
 
 
 @app.get("/students/{id}")
 async def get_student_by_id(id: int):
-    index, s = get_student(id)
+    cursor = cnx.cursor(dictionary=True)
+    query = 'SELECT * FROM `students` WHERE student_id = %s'
+    val = (id, )
+    cursor.execute(query, val)
 
-    if s is None:
-        raise HTTPException(status_code=404, detail="Student not found")
+    student = cursor.fetchone()
 
-    return s
+    if student:
+        return student
+
+    raise HTTPException(status_code=404, detail="Student not found")
 
 
 @app.post("/students")
 async def create_student(student: Student):
-    if student.id is not None:
-        raise HTTPException(status_code=400, detail="ID is not a valid field")
+    cursor = cnx.cursor()
+    statement = "INSERT INTO `students` (`student_name`,`student_age`,`student_mail`,`student_phone`) " \
+                "VALUES (%s,%s,%s,%s)"
+    val = (student.name, student.age, student.email, student.phone)
 
-    student.id = new_id()
+    cursor.execute(statement, val)
 
-    students.append(student)
+    cnx.commit()
+
+    student.id = cursor.lastrowid
+
     return student
 
 
@@ -55,26 +59,38 @@ async def update_student(id: int, student: Student):
     if id != student.id:
         raise HTTPException(status_code=400, detail="ID from path is not equals to body ID")
 
-    index, s = get_student(id)
+    cursor = cnx.cursor()
+    statement = """
+    UPDATE `students` SET 
+        `student_name` = %s, 
+        `student_age` = %s,
+        `student_mail` = %s,
+        `student_phone` = %s
+    WHERE `student_id` = %s;
+    """
+    val = (student.name, student.age, student.email, student.phone, student.id)
 
-    if index is None:
+    cursor.execute(statement, val)
+
+    cnx.commit()
+
+    if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Student not found")
-
-    students[index] = student
 
     return student
 
 
-def new_id():
-    global id_counter
-    id_counter += 1
+@app.delete("/students/{id}")
+async def delete_student(id: int):
+    cursor = cnx.cursor()
+    statement = """DELETE FROM `students` WHERE `student_id` = %s;"""
+    val = (id, )
 
-    return id_counter
+    cursor.execute(statement, val)
 
+    cnx.commit()
 
-def get_student(id: int):
-    for index, s in enumerate(students):
-        if s.id == id:
-            return index, s
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Student not found")
 
-    return None, None
+    return {"detail": "deleted with success"}
