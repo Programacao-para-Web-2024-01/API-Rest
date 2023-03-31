@@ -1,36 +1,53 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import mysql.connector
+from dotenv import load_dotenv
 
-cnx = mysql.connector.connect(user='root', database='classroom')
+import os
+import requests
+
+load_dotenv()
+from deta import Deta  # Import Deta
+
+deta = Deta(os.environ["PROJECT_KEY"])
+
+db = deta.Base("students")
+
 app = FastAPI()
 
 
 class Student(BaseModel):
-    id: int | None
     name: str
     age: int
     email: str
     phone: str
 
 
+@app.get("/")
+async def hello_world():
+    response = requests.get("https://jsonplaceholder.typicode.com/posts/1")
+    return {
+        "status_code": response.status_code,
+        "headers": response.headers,
+        "response": response.json()
+    }
+
+
 @app.get("/students")
 async def get_students():
-    cursor = cnx.cursor(dictionary=True)
-    query = 'SELECT * FROM `students`'
-    cursor.execute(query)
+    res = db.fetch()
+    all_items = res.items
 
-    return cursor.fetchall()
+    # fetch until last is 'None'
+    while res.last:
+        res = db.fetch(last=res.last)
+        all_items += res.items
+
+    return all_items
 
 
 @app.get("/students/{id}")
-async def get_student_by_id(id: int):
-    cursor = cnx.cursor(dictionary=True)
-    query = 'SELECT * FROM `students` WHERE student_id = %s'
-    val = (id, )
-    cursor.execute(query, val)
-
-    student = cursor.fetchone()
+async def get_student_by_id(id: str):
+    student = db.get(id)
 
     if student:
         return student
@@ -40,57 +57,20 @@ async def get_student_by_id(id: int):
 
 @app.post("/students")
 async def create_student(student: Student):
-    cursor = cnx.cursor()
-    statement = "INSERT INTO `students` (`student_name`,`student_age`,`student_mail`,`student_phone`) " \
-                "VALUES (%s,%s,%s,%s)"
-    val = (student.name, student.age, student.email, student.phone)
+    new_student = db.insert(student.dict())
 
-    cursor.execute(statement, val)
-
-    cnx.commit()
-
-    student.id = cursor.lastrowid
-
-    return student
+    return new_student
 
 
 @app.put("/students/{id}")
-async def update_student(id: int, student: Student):
-    if id != student.id:
-        raise HTTPException(status_code=400, detail="ID from path is not equals to body ID")
-
-    cursor = cnx.cursor()
-    statement = """
-    UPDATE `students` SET 
-        `student_name` = %s, 
-        `student_age` = %s,
-        `student_mail` = %s,
-        `student_phone` = %s
-    WHERE `student_id` = %s;
-    """
-    val = (student.name, student.age, student.email, student.phone, student.id)
-
-    cursor.execute(statement, val)
-
-    cnx.commit()
-
-    if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Student not found")
+async def update_student(id: str, student: Student):
+    db.update(student.dict(), id)
 
     return student
 
 
 @app.delete("/students/{id}")
-async def delete_student(id: int):
-    cursor = cnx.cursor()
-    statement = """DELETE FROM `students` WHERE `student_id` = %s;"""
-    val = (id, )
-
-    cursor.execute(statement, val)
-
-    cnx.commit()
-
-    if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Student not found")
+async def delete_student(id: str):
+    db.delete(id)
 
     return {"detail": "deleted with success"}
